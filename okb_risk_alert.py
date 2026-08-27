@@ -4,14 +4,15 @@ OKB Risk Score — daily Telegram alert.
 Reads the latest row from data/okb_risk_history.json (written by
 okb_risk_score.py) and pushes a formatted summary to Telegram. Meant to run
 right after `okb_risk_score.py --update` in the daily GitHub Actions
-workflow. Same pattern, same Telegram bot as btc_risk_alert.py /
-gold_risk_alert.py — one bot, one extra daily message.
+workflow, so it always reflects the freshly computed score.
 
 Sends every day (not just on zone change) — this is a daily summary, not a
-change-detection alert.
+change-detection alert. Same pattern and same Telegram bot as
+btc_risk_alert.py / eth_risk_alert.py / gold_risk_alert.py — one bot, one
+more daily message.
 
 Requires two env vars (set as GitHub Actions secrets — the SAME ones used
-by the BTC/gold alert scripts, no separate bot needed):
+by the other risk-score repos, no separate bot needed):
     TELEGRAM_BOT_TOKEN  — from @BotFather
     TELEGRAM_CHAT_ID    — your user/chat id
 
@@ -35,13 +36,10 @@ HISTORY_FILE = DATA_DIR / "okb_risk_history.json"
 
 TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
 
-# Sell zones start here — used only to decide whether to show the holdings
-# gate reminder line. Mirrors the tier field written by okb_risk_score.py
-# (values: "sell1", "sell2", "sell3"). Set your own $ threshold below —
-# unlike the gold script's $500, there's no principled OKB-specific number
-# here, pick whatever fits your position size.
+# Sell zones start here — used only to decide whether to show the $500
+# holdings-gate reminder line. Mirrors the tier field written by
+# okb_risk_score.py (values: "sell1", "sell2", "sell3").
 SELL_TIERS = {"sell1", "sell2", "sell3"}
-HOLDINGS_GATE_USD = 500
 
 COMPONENT_LABELS = [
     ("log_regression", "Log-regression"),
@@ -74,7 +72,7 @@ def build_message(row: dict) -> str:
     tier = row.get("tier")
 
     lines = [
-        f"\U0001f537 OKB Risk Score — {row['date']}",
+        f"\U0001fa99 OKB Risk Score — {row['date']}",
         "",
         f"Score:  {score:.2f}  [{zone}]",
         f"Price:  {fmt_usd(price)}  (OKB/USDT)",
@@ -83,7 +81,7 @@ def build_message(row: dict) -> str:
     ]
 
     if tier in SELL_TIERS:
-        lines.append(f"   \u26a0\ufe0f Only if OKB holdings \u2265 ${HOLDINGS_GATE_USD} — check before acting")
+        lines.append("   \u26a0\ufe0f Only if OKB holdings \u2265 $500 — check before acting")
     elif row.get("size_usd") is not None:
         mult = row.get("multiplier")
         mult_note = f" ({mult}\u00d7 base)" if mult is not None else ""
