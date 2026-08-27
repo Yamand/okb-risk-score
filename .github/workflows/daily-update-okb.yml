@@ -2,9 +2,10 @@ name: Daily OKB risk score update
 
 on:
   schedule:
-    # 00:40 UTC daily — offset from the BTC (00:00) and gold (00:20) jobs so
-    # all three don't hit external APIs in the same minute if they share a repo
-    - cron: '40 0 * * *'
+    # 00:25 UTC daily — a few minutes after BTC/ETH/gold, avoids all four
+    # workflows hitting external APIs at the exact same minute if they ever
+    # end up sharing a runner queue
+    - cron: '37 0 * * *'
   workflow_dispatch: {}
 
 permissions:
