@@ -1,41 +1,50 @@
 """
-OKB Risk Score — daily composite 0-1 score from OKX public candlestick data
-for OKB-USDT (OKX's own exchange/utility token).
+OKB Risk Score — daily composite 0-1 risk score from OKX's public
+candlestick data for OKB-USDT (OKX's own exchange/utility token, quoted in
+USDT). Same pattern, same four-component methodology, and same weights as
+the BTC and gold (XAUT) risk scores in this series.
 
-DATA SOURCE (why OKX, not Binance):
-  - OKB is NOT listed on Binance at all (OKX's native token isn't tradable
-    there), so the Binance-klines pattern used by the BTC/ETH scripts is not
-    an option for this asset.
-  - OKX itself is the obvious and best source: OKB-USDT is one of the
-    exchange's own oldest pairs, so it should have the deepest available
-    history for this token anywhere. Same endpoint and pagination pattern
-    already proven working for XAUT-USDT in the gold risk score repo.
-  - No live run against OKX has happened yet from the environment that built
-    this — verify the first local run's printed date range before relying
-    on it, same caveat as the gold repo.
+DATA SOURCE:
+  OKX's own `/api/v5/market/history-candles` endpoint, OKB-USDT pair. This
+  is the natural (and only realistic) primary source, since OKB is OKX's
+  native token — there's no independent third-party venue with comparable
+  depth/history for this pair. Unlike the gold script, there was no need to
+  shop between Stooq/Binance/OKX here.
+
+This script has NOT been run against live OKX data from the environment
+that built it (OKX wasn't reachable from that sandbox) — verify the first
+local run's printed date range and JSON shape before relying on it. Same
+caveat as the gold script.
 
 Components (all normalized 0-1 via expanding historical percentile rank,
 so the score self-calibrates over time without hardcoded thresholds):
 
-  1. Log-regression band position   (35%) — price vs. long-term log-log growth curve
+  1. Log-regression band position   (35%) — price vs. long-term log-log trend line
   2. 200-day MA multiple            (25%) — price stretch vs. long-term trend
   3. RSI-14 (daily)                 (20%) — short-term overbought/oversold
-  4. Volatility-adjusted momentum   (20%) — 30d return / 30d realized vol,
-                                     3-day EMA smoothed pre-rank to dampen
-                                     30d rolling-window edge effects
+  4. Volatility-adjusted momentum   (20%) — 30d return / 30d realized vol
 
 0 = cheap / accumulate harder.  1 = expensive / reduce or take profit.
 
+*** READ THE README BEFORE TRUSTING THIS FOR OKB SPECIFICALLY ***
+OKB is not BTC (no adoption-curve dynamic) and not gold (no multi-millennia
+store-of-value dynamic either). It's a single centralized exchange's native
+utility/gas token: its price is driven by OKX's own business health,
+regulatory exposure, quarterly buyback-and-burn supply mechanics, and
+exchange-specific liquidation/de-leveraging events (OKB has had at least
+one sharp flash-crash-and-recover episode). The log-regression component in
+particular is on much shakier conceptual ground for OKB than for either
+BTC or gold — see README-okb.md before weighting it heavily.
+
 OKX API NOTES:
-  - Endpoint: GET /api/v5/market/history-candles — OKX's endpoint for older
-    historical data (their /market/candles endpoint only returns a limited
-    recent window). Docs:
+  - Endpoint: GET /api/v5/market/history-candles — OKX's endpoint for
+    paging backward through older data (their /market/candles endpoint
+    only returns a limited recent window). Docs:
     https://www.okx.com/docs-v5/en/#order-book-trading-market-data-get-candlesticks-history
-  - Paginate backwards in time using the "after" param (returns candles with
-    timestamp strictly earlier than "after"), starting from now and walking
-    back until an empty page signals the true start of history — no
-    known/hardcoded listing date is assumed (OKB's exact OKX listing date
-    isn't reliably documented, unlike e.g. ETHUSDT's Binance listing date).
+  - Paginate backwards in time using the "after" param (returns candles
+    with timestamp strictly earlier than "after"), starting from now and
+    walking back until an empty page signals the true start of history —
+    no known/hardcoded listing date is assumed.
   - Response rows are ordered NEWEST-first: [ts, open, high, low, close,
     vol, volCcy, volCcyQuote, confirm], all values as strings, ts in ms.
   - No API key needed for public market data.
@@ -63,11 +72,8 @@ HISTORY_FILE = DATA_DIR / "okb_risk_history.json"
 # rows that never get a composite_score (dropped from HISTORY_FILE by
 # build_output). --update merges from THIS file, not from HISTORY_FILE, so
 # the regression fit and expanding percentile ranks always see the full
-# price series and match a full recompute exactly. Reconstructing prices
-# from the scored output alone silently drops the earliest ~200-260 days,
-# which skews the global log-regression fit (those rows anchor the low end
-# of the log-days range) and can shift the composite score enough to flip
-# a DCA zone near a boundary.
+# price series and match a full recompute exactly. Same distinction/bug
+# fix as the BTC and gold scripts — see their READMEs for the story.
 PRICES_FILE = DATA_DIR / "okb_prices_raw.json"
 
 WEIGHTS = {
@@ -77,15 +83,14 @@ WEIGHTS = {
     "vol_adj_momentum": 0.20,
 }
 
-# OKB was launched by the OK Blockchain Foundation in March 2018; no exact
-# public day is consistently documented (unlike BTC's genesis block or
-# ETHUSDT's Binance listing date), so this uses the first of that month as
-# a reasonable anchor. Unlike gold's Nixon Shock anchor (a "no growth-curve"
-# asset used only for structural parity), OKB is a real launched token with
-# adoption dynamics, so this plays the same role here as ETH's genesis date.
-# Must never change once scores have been computed and stored, or historical
-# composite_score values become inconsistent with new ones.
-REGRESSION_ANCHOR = pd.Timestamp("2018-03-01")
+# Fixed anchor for the log-regression day-count axis: OKB's public launch,
+# 2018-03-22 (announced by OKEx/OKX, distributed to exchange users rather
+# than sold in an ICO). This is the closest OKB analog to BTC's
+# genesis-block anchor or gold's Nixon-Shock anchor — but read the
+# log-regression caveat in README-okb.md, it's on much weaker footing here.
+# Must never change once scores have been computed and stored, or
+# historical composite_score values become inconsistent with new ones.
+REGRESSION_ANCHOR = pd.Timestamp("2018-03-22")
 
 
 def fetch_okx_history(stop_before: pd.Timestamp = None, limit=100):
@@ -151,11 +156,6 @@ def compute_components(df: pd.DataFrame) -> pd.DataFrame:
     df["log_days"] = np.log(df["days_since_anchor"])
 
     # --- 1. Log-regression band position ---
-    # Fit log(price) ~ a * log(days) + b using all available history (refit each run).
-    # NOTE: OKX's OKB-USDT history almost certainly doesn't reach back to the token's
-    # actual March 2018 launch, so this regression is fit on a shorter window than
-    # OKB's full life — it will be less stable in the first year or two of computed
-    # scores, same caveat as the ETH script re: Binance's ETHUSDT listing gap.
     coeffs = np.polyfit(df["log_days"], df["log_price"], 1)
     df["log_price_fit"] = np.polyval(coeffs, df["log_days"])
     df["regression_residual"] = df["log_price"] - df["log_price_fit"]
@@ -181,11 +181,7 @@ def compute_components(df: pd.DataFrame) -> pd.DataFrame:
     df["roc_30d"] = df["close"].pct_change(30)
     df["vol_30d"] = df["ret"].rolling(30, min_periods=30).std()
     df["vol_adj_mom_raw"] = df["roc_30d"] / df["vol_30d"].replace(0, np.nan)
-    # 3-day EMA on the raw ratio before ranking — same smoothing as the ETH
-    # script, to cut day-to-day composite noise from 30d rolling-window edge
-    # effects without adding meaningful lag.
-    df["vol_adj_mom_smoothed"] = df["vol_adj_mom_raw"].ewm(span=3, min_periods=1, adjust=False).mean()
-    df["vol_adj_momentum"] = percentile_rank_expanding(df["vol_adj_mom_smoothed"])
+    df["vol_adj_momentum"] = percentile_rank_expanding(df["vol_adj_mom_raw"])
 
     return df
 
@@ -202,21 +198,19 @@ def compute_composite(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # Base weekly DCA size. Zone sizes below are BASE_WEEKLY_USD * multiplier.
+# Same $10 base and same zone cutoffs as the BTC/gold scripts for
+# structural parity — adjust to taste, there's nothing OKB-specific here.
 BASE_WEEKLY_USD = 10
 
-# Same zone table shape as the ETH script (OKB behaves like a volatile
-# altcoin/exchange token, closer to ETH than to gold) — adjust to taste once
-# you've seen how OKB's actual score distribution looks.
 ZONES = [
     # (upper_bound_exclusive, zone, tier, multiplier, action)
-    (0.10, "Extreme Buy",   "buy",   3.0, "Max accumulate"),
-    (0.20, "Strong Buy",    "buy",   1.5, "Accumulate"),
-    (0.25, "Buy",           "buy",   1.0, "Normal DCA"),
-    (0.35, "Reduced Buy",   "buy",   0.5, "Slow down"),
-    (0.60, "Stop — Hold",   "hold",  0.0, "Accumulation done"),
-    (0.70, "Sell Tier 1",   "sell1", None, "Exit 5% of holdings"),
-    (0.80, "Sell Tier 2",   "sell2", None, "Exit 10% of holdings"),
-    (1.01, "Sell Tier 3 / Exit", "sell3", None, "Exit 20% or full position"),
+    (0.15, "Extreme Buy",       "buy",   3.0, "Max accumulate"),
+    (0.25, "Strong Buy",        "buy",   1.5, "Accumulate"),
+    (0.40, "Buy",                "buy",   1.0, "Normal DCA"),
+    (0.60, "Reduced / Hold",     "buy",   0.5, "Slow down"),
+    (0.70, "Sell Tier 1",        "sell1", None, "Exit 10% of holdings"),
+    (0.80, "Sell Tier 2",        "sell2", None, "Exit 20% of holdings"),
+    (1.01, "Sell Tier 3 / Exit", "sell3", None, "Exit 30% or full position"),
 ]
 
 
@@ -228,7 +222,6 @@ def zone_for_score(score):
         if score < upper:
             size = round(BASE_WEEKLY_USD * mult, 2) if mult is not None else None
             return {"zone": zone, "tier": tier, "multiplier": mult, "size_usd": size, "action": action}
-    # score == 1.0 edge case, falls into last zone above via < 1.01
     upper, zone, tier, mult, action = ZONES[-1]
     return {"zone": zone, "tier": tier, "multiplier": mult, "size_usd": None, "action": action}
 
