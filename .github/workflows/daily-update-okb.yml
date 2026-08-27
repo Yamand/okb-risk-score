@@ -1,0 +1,42 @@
+name: Daily OKB risk score update
+
+on:
+  schedule:
+    # 00:25 UTC daily — a few minutes after BTC/ETH/gold, avoids all four
+    # workflows hitting external APIs at the exact same minute if they ever
+    # end up sharing a runner queue
+    - cron: '37 0 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pandas numpy requests
+
+      - name: Run OKB risk score update
+        run: python okb_risk_score.py --update
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/okb_risk_history.json data/okb_prices_raw.json
+          git diff --cached --quiet || git commit -m "Daily OKB risk score update"
+          git push
+
+      - name: Send Telegram alert
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python okb_risk_alert.py
